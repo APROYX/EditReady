@@ -20,6 +20,13 @@
 
 ---
 
+## See it in 24 seconds
+
+<p align="center">
+  <a href="docs/EditReady-explainer.mp4"><img src="docs/explainer-preview.gif" width="640" alt="Animated explainer: a voxel filmstrip with rare full pictures makes Premiere rebuild 228 frames at every cut; EditReady's copy has a full picture every 10 frames, so a cut rebuilds at most 10"></a><br>
+  <sub>Preview without sound. <a href="docs/EditReady-explainer.mp4"><b>▶ Watch the full video with sound (MP4, 14 MB)</b></a></sub>
+</p>
+
 ## The problem
 
 You record with OBS, edit a fast-cut video in Premiere with hundreds of cuts… and the export takes **an hour**.
