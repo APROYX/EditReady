@@ -1,4 +1,4 @@
-﻿// EditReady: makes edit-friendly copies of videos (a full frame every few frames) so
+// EditReady: makes edit-friendly copies of videos (a full frame every few frames) so
 // Premiere can jump to any cut instantly. Exports and timeline scrubbing get much faster.
 //
 // The window layout lives in MainWindow.xaml (embedded at build time). Build with build.ps1,
@@ -33,8 +33,8 @@ using System.Windows.Threading;
 [assembly: AssemblyTitle("EditReady")]
 [assembly: AssemblyDescription("Makes videos fast to cut and export in Premiere")]
 [assembly: AssemblyProduct("EditReady")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace EditReady
 {
@@ -63,6 +63,8 @@ namespace EditReady
         public double Fps = 60;
         public bool AudioCopyOk = true;
         public long FileBytes;
+        public double VideoMbps;   // source video bitrate (0 = unknown)
+        public double AudioMbps;   // all audio tracks together
     }
 
     // One video in the list. The card in MainWindow.xaml binds to these properties.
@@ -85,6 +87,7 @@ namespace EditReady
         public string Output;
         public string Error = "";
         public bool InRun;
+        public bool Downscaled;
 
         void Set<T>(ref T field, T value, string name)
         {
@@ -107,7 +110,8 @@ namespace EditReady
         System.Windows.Shapes.Rectangle dropRect;
         System.Windows.Shapes.Ellipse engineDot;
         TextBlock engineText, countText, statusText, warnText, folderText;
-        RadioButton saveNext, saveFolder, gopFast, gopBal, gopSmall;
+        RadioButton saveNext, saveFolder, gopFast, gopBal, gopSmall, resOrig, res1080;
+        FrameworkElement tipScale;
         ItemsControl jobList;
 
         readonly ObservableCollection<JobVM> jobs = new ObservableCollection<JobVM>();
@@ -116,7 +120,7 @@ namespace EditReady
         readonly DispatcherTimer dragTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
 
         string ffmpeg, ffprobe;
-        bool ready, gpu, forceCpu, autoStart, tipDismissed, running;
+        bool ready, gpu, forceCpu, autoStart, tipDismissed, scaleTipHidden, running;
         string folder = "";
         string idleMessage;
         Thread worker;
@@ -125,6 +129,7 @@ namespace EditReady
         readonly object procLock = new object();
         string runFolder;
         int runGop = 10;
+        bool runScale;
         double lastSpeed;
         int runDone, runFailed;
         IntPtr hwnd;
@@ -160,6 +165,8 @@ namespace EditReady
             statusText = F<TextBlock>("StatusText"); warnText = F<TextBlock>("WarnText"); folderText = F<TextBlock>("FolderText");
             saveNext = F<RadioButton>("SaveNext"); saveFolder = F<RadioButton>("SaveFolder");
             gopFast = F<RadioButton>("GopFast"); gopBal = F<RadioButton>("GopBal"); gopSmall = F<RadioButton>("GopSmall");
+            resOrig = F<RadioButton>("ResOrig"); res1080 = F<RadioButton>("Res1080");
+            tipScale = F<FrameworkElement>("TipScale");
             jobList = F<ItemsControl>("JobList");
 
             jobList.ItemsSource = jobs;
@@ -171,7 +178,7 @@ namespace EditReady
             browseBtn.Click += delegate { AddViaDialog(); };
             addBtn.Click += delegate { AddViaDialog(); };
             clearBtn.Click += delegate { ClearFinished(); };
-            tipClose.Click += delegate { tipDismissed = true; SaveSettings(); UpdateView(); };
+            tipClose.Click += delegate { tipDismissed = true; scaleTipHidden = true; SaveSettings(); UpdateView(); };
             goBtn.Click += delegate { if (running) Stop(); else Start(); };
             folderChange.Click += delegate { ChooseFolder(); };
             saveNext.Checked += delegate { RefreshFolderRow(); SaveSettings(); UpdateView(); };
@@ -182,6 +189,7 @@ namespace EditReady
             };
             RoutedEventHandler gopChanged = delegate { RefreshReadyTexts(); SaveSettings(); UpdateView(); };
             gopFast.Checked += gopChanged; gopBal.Checked += gopChanged; gopSmall.Checked += gopChanged;
+            resOrig.Checked += gopChanged; res1080.Checked += gopChanged;
 
             DragEventHandler over = (s, e) =>
             {
@@ -225,13 +233,16 @@ namespace EditReady
             var probeThread = new Thread(ProbeLoop) { IsBackground = true };
             probeThread.Start();
 
+            // EditReady.exe [--cpu] [--queue] files...   (files dropped on the exe start right away unless --queue)
             var files0 = new List<string>();
+            bool queueOnly = false;
             foreach (string a in args)
             {
                 if (a.Equals("--cpu", StringComparison.OrdinalIgnoreCase)) forceCpu = true;
+                else if (a.Equals("--queue", StringComparison.OrdinalIgnoreCase)) queueOnly = true;
                 else files0.Add(a);
             }
-            if (files0.Count > 0) { AddPaths(files0); autoStart = true; }
+            if (files0.Count > 0) { AddPaths(files0); autoStart = !queueOnly; }
             UpdateView();
         }
 
@@ -457,8 +468,8 @@ namespace EditReady
             double d;
             if (double.TryParse(o.Trim(), NumberStyles.Float, Inv, out d)) mi.Duration = d;
 
-            Run(ffprobe, "-v error -select_streams V:0 -show_entries stream=width,height,avg_frame_rate,r_frame_rate,duration -of default=nw=1 " + Q(input), out o);
-            double avg = 0, rf = 0, sd = 0;
+            Run(ffprobe, "-v error -select_streams V:0 -show_entries stream=width,height,avg_frame_rate,r_frame_rate,duration,bit_rate -of default=nw=1 " + Q(input), out o);
+            double avg = 0, rf = 0, sd = 0, vbr = 0;
             foreach (string raw in o.Split('\n'))
             {
                 string line = raw.Trim();
@@ -471,17 +482,32 @@ namespace EditReady
                 else if (k == "avg_frame_rate") avg = Rate(v);
                 else if (k == "r_frame_rate") rf = Rate(v);
                 else if (k == "duration") double.TryParse(v, NumberStyles.Float, Inv, out sd);
+                else if (k == "bit_rate") double.TryParse(v, NumberStyles.Float, Inv, out vbr);
             }
             if (avg > 0 && avg < 1000) mi.Fps = avg; else if (rf > 0 && rf < 1000) mi.Fps = rf;
             if (mi.Duration <= 0 && sd > 0) mi.Duration = sd;
 
             // Premiere is happy with AAC/MP3 in MP4; anything else (FLAC, Opus, PCM...) becomes AAC 320k.
-            Run(ffprobe, "-v error -select_streams a -show_entries stream=codec_name -of csv=p=0 " + Q(input), out o);
+            Run(ffprobe, "-v error -select_streams a -show_entries stream=codec_name,bit_rate -of csv=p=0 " + Q(input), out o);
+            int tracks = 0;
+            double abr = 0;
             foreach (string raw in o.Split('\n'))
             {
-                string c = raw.Trim().Split(',')[0].Trim();
-                if (c.Length > 0 && c != "aac" && c != "mp3") mi.AudioCopyOk = false;
+                string[] parts = raw.Trim().Split(',');
+                string c = parts[0].Trim();
+                if (c.Length == 0) continue;
+                tracks++;
+                double b;
+                if (parts.Length > 1 && double.TryParse(parts[1], NumberStyles.Float, Inv, out b)) abr += b;
+                if (c != "aac" && c != "mp3") mi.AudioCopyOk = false;
             }
+            if (!mi.AudioCopyOk) abr = tracks * 320000;
+            else if (abr <= 0) abr = tracks * 160000; // MKV doesn't store per-track bitrates
+            mi.AudioMbps = abr / 1e6;
+
+            // MKV doesn't store the video bitrate either; work it out from the file size.
+            if (vbr > 0) mi.VideoMbps = vbr / 1e6;
+            else if (mi.Duration > 0 && mi.FileBytes > 0) mi.VideoMbps = Math.Max(0, mi.FileBytes * 8 / mi.Duration / 1e6 - mi.AudioMbps);
             return mi;
         }
 
@@ -515,6 +541,7 @@ namespace EditReady
 
             runFolder = saveFolder.IsChecked == true ? folder : null;
             runGop = CurrentGop();
+            runScale = res1080.IsChecked == true;
             foreach (JobVM j in jobs) j.InRun = false;
             cancelRequested = false;
             running = true;
@@ -631,12 +658,14 @@ namespace EditReady
             try { size = new FileInfo(outPath).Length; } catch { }
             string took = Fmt(sw.Elapsed.TotalSeconds);
             bool cpu = !useGpu;
+            bool shrunk = Downscales(mi, runScale);
             UI(delegate
             {
                 job.Output = outPath;
                 job.State = "Done";
                 job.Progress = 100;
-                job.StatusText = "Saved as " + Path.GetFileName(outPath) + "  \u00b7  " + FmtSize(size) + "  \u00b7  took " + took + (cpu ? " on the CPU" : "");
+                job.Downscaled = shrunk;
+                job.StatusText = "Saved as " + Path.GetFileName(outPath) + (shrunk ? " (1080p)" : "") + "  \u00b7  " + FmtSize(size) + "  \u00b7  took " + took + (cpu ? " on the CPU" : "");
                 runDone++;
                 UpdateView();
             });
@@ -676,16 +705,15 @@ namespace EditReady
             var sb = new StringBuilder("-hide_banner -nostdin -y ");
             if (useGpu) sb.Append("-hwaccel cuda ");
             sb.Append("-i ").Append(Q(input)).Append(" -map 0:V:0 -map 0:a? ");
-            if (mi.Width % 2 != 0 || mi.Height % 2 != 0) sb.Append("-vf scale=trunc(iw/2)*2:trunc(ih/2)*2 ");
-            if (useGpu)
-            {
-                // Bitrate scaled from 60/80 Mbps at 1080p60: well above a YouTube export, so no visible loss.
-                double ratio = PixelRatio(mi);
-                int target = Clamp((int)Math.Round(60 * ratio), 15, 200);
-                int max = Clamp((int)Math.Round(80 * ratio), 20, 240);
-                sb.AppendFormat(Inv, "-c:v h264_nvenc -preset p5 -rc vbr -cq 16 -b:v {0}M -maxrate {1}M -bufsize {2}M -profile:v high ", target, max, max * 2);
-            }
+            if (Downscales(mi, runScale))
+                sb.Append(mi.Width >= mi.Height ? "-vf scale=-2:1080:flags=bicubic " : "-vf scale=1080:-2:flags=bicubic ");
+            else if (mi.Width % 2 != 0 || mi.Height % 2 != 0)
+                sb.Append("-vf scale=trunc(iw/2)*2:trunc(ih/2)*2 ");
+            int target, max;
+            Bitrates(mi, runGop, runScale, out target, out max);
+            if (useGpu) sb.AppendFormat(Inv, "-c:v h264_nvenc -preset p5 -rc vbr -cq 16 -b:v {0}M ", target);
             else sb.Append("-c:v libx264 -preset veryfast -crf 16 ");
+            sb.AppendFormat(Inv, "-maxrate {0}M -bufsize {1}M -profile:v high ", max, max * 2);
             sb.AppendFormat(Inv, "-g {0} -keyint_min {0} -bf 0 -pix_fmt yuv420p ", runGop);
             sb.Append(mi.AudioCopyOk ? "-c:a copy " : "-c:a aac -b:a 320k ");
             sb.Append("-map_metadata 0 -progress pipe:1 -nostats -f mp4 ").Append(Q(output));
@@ -798,6 +826,8 @@ namespace EditReady
             countText.Text = jobs.Count + (jobs.Count == 1 ? " video" : " videos") + (footage > 0 ? "  \u00b7  " + FmtLong(footage) + " of footage" : "");
             clearBtn.Visibility = finished > 0 ? Visibility.Visible : Visibility.Collapsed;
             tip.Visibility = !tipDismissed && jobs.Any(j => j.State == "Done") ? Visibility.Visible : Visibility.Collapsed;
+            tipScale.Visibility = !scaleTipHidden && jobs.Any(j => j.State == "Done" && j.Downscaled) ? Visibility.Visible : Visibility.Collapsed;
+            if (tipScale.Visibility == Visibility.Visible) tip.Visibility = Visibility.Visible; // the scale note matters even if the tip was dismissed
             settingsPanel.IsEnabled = !running;
             warnText.Visibility = Visibility.Collapsed;
 
@@ -880,23 +910,67 @@ namespace EditReady
         string ReadyText(JobVM j)
         {
             if (j.Info == null) return "Reading video info\u2026";
-            return "Ready  \u00b7  copy will be about " + FmtSize((long)Estimate(j));
+            bool shrink = Downscales(j.Info, res1080.IsChecked == true);
+            return "Ready  \u00b7  " + (shrink ? "1080p copy" : "copy") + " will be about " + FmtSize((long)Estimate(j));
         }
 
-        // Rough size of the copy: ~40 Mbps at 1080p60 for Balanced, measured on real OBS recordings.
+        // Only shrink videos bigger than 1080p (short side over 1080 px); never enlarge.
+        static bool Downscales(MediaInfo mi, bool to1080)
+        {
+            return to1080 && Math.Min(mi.Width, mi.Height) > 1080;
+        }
+
+        static void OutputSize(MediaInfo mi, bool to1080, out int w, out int h)
+        {
+            w = mi.Width; h = mi.Height;
+            if (!Downscales(mi, to1080)) return;
+            if (mi.Width >= mi.Height) { w = (int)Math.Round(mi.Width * 1080.0 / mi.Height / 2) * 2; h = 1080; }
+            else { h = (int)Math.Round(mi.Height * 1080.0 / mi.Width / 2) * 2; w = 1080; }
+        }
+
+        // Video bitrate (Mbps) for the copy. Quality 16 asks for a lot, so the copy is capped at a multiple of what
+        // the source actually has: a copy can't be sharper than its original. Tested on a 15 Mbps 4K60 recording,
+        // quality (SSIM) moved 0.987 -> 0.982 while the file went from 18.8 GB to 3.6 GB.
+        static void Bitrates(MediaInfo mi, int gop, bool to1080, out int target, out int max)
+        {
+            int w, h;
+            OutputSize(mi, to1080, out w, out h);
+            double ratio = PixelRatio(w, h, mi.Fps);
+            double hiMax = Math.Max(20, Math.Min(240, 80 * ratio));
+            double m = hiMax;
+            if (mi.VideoMbps > 0)
+            {
+                double mult = gop <= 5 ? 3.0 : (gop >= 30 ? 1.4 : 2.0);
+                // A downscaled frame needs fewer bits than the source spent on its 4K frame.
+                double pixFactor = Downscales(mi, to1080) ? Math.Max(0.6, (double)w * h / ((double)mi.Width * mi.Height)) : 1.0;
+                // Never starve a low-bitrate source: 10 Mbps at 1080p60, growing gently with size (about 23 at 4K60).
+                double floor = Math.Max(4, 10 * Math.Pow(ratio, 0.6));
+                m = Math.Min(hiMax, Math.Max(floor, mi.VideoMbps * pixFactor * mult));
+            }
+            max = Math.Max(4, (int)Math.Round(m));
+            target = Math.Max(3, (int)Math.Round(m * 0.85));
+        }
+
+        // Size of the copy: quality 16 naturally lands around 40 Mbps at 1080p60 (measured on OBS recordings),
+        // unless the cap above is lower.
         double Estimate(JobVM j)
         {
             if (j.Info == null) return 0;
             int g = CurrentGop();
+            bool to1080 = res1080.IsChecked == true;
+            int w, h, target, max;
+            OutputSize(j.Info, to1080, out w, out h);
+            Bitrates(j.Info, g, to1080, out target, out max);
             double gopFactor = g <= 5 ? 1.25 : (g >= 30 ? 0.8 : 1.0);
-            double mbps = Math.Max(8, Math.Min(200, 40 * PixelRatio(j.Info))) * gopFactor + 0.4;
+            double natural = 40 * PixelRatio(w, h, j.Info.Fps) * gopFactor;
+            double mbps = Math.Min(natural, max) + j.Info.AudioMbps;
             return mbps * 1e6 / 8 * j.Info.Duration;
         }
 
-        static double PixelRatio(MediaInfo mi)
+        static double PixelRatio(int w, int h, double fps)
         {
-            double fps = mi.Fps > 0 ? Math.Min(mi.Fps, 240) : 60;
-            return (double)mi.Width * mi.Height * fps / (1920.0 * 1080 * 60);
+            fps = fps > 0 ? Math.Min(fps, 240) : 60;
+            return (double)w * h * fps / (1920.0 * 1080 * 60);
         }
 
         static string MetaText(MediaInfo mi)
@@ -950,6 +1024,7 @@ namespace EditReady
                     if (k == "folder") folder = v;
                     else if (k == "save" && v == "folder" && Directory.Exists(folder)) saveFolder.IsChecked = true;
                     else if (k == "gop") { if (v == "5") gopFast.IsChecked = true; else if (v == "30") gopSmall.IsChecked = true; }
+                    else if (k == "res" && v == "1080") res1080.IsChecked = true;
                     else if (k == "tipDismissed") tipDismissed = v == "1";
                 }
                 if (saveFolder.IsChecked == true && !Directory.Exists(folder)) saveNext.IsChecked = true;
@@ -967,6 +1042,7 @@ namespace EditReady
                     "folder=" + folder,
                     "save=" + (saveFolder.IsChecked == true ? "folder" : "next"),
                     "gop=" + CurrentGop(),
+                    "res=" + (res1080.IsChecked == true ? "1080" : "orig"),
                     "tipDismissed=" + (tipDismissed ? "1" : "0")
                 });
             }

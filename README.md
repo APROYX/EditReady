@@ -69,11 +69,29 @@ Your original files are never changed.
 
 **Optimize for**
 
-| Option | Full picture every | Best for |
+| Option | Full picture every | Bitrate cap | Best for |
+|---|---|---|---|
+| Snappiest editing | 5 frames | 3× the original's | Very fast cutting and scrubbing. Biggest files. |
+| **Balanced** (default) | 10 frames | 2× the original's | Fast cuts and exports at a sensible size. |
+| Smaller files | 30 frames | 1.4× the original's | Saving disk space. Still far quicker than a raw OBS recording. |
+
+**Resolution**
+- **Original** (default): every video keeps its resolution.
+- **1080p**: 4K and 1440p videos are shrunk to 1080p. They convert about **3× faster**, the files are smaller,
+  and editing is smoother. Videos that are already 1080p or smaller are left as they are; nothing is ever enlarged.
+  Pick this when you export in 1080p anyway.
+
+> **After replacing a 4K clip with a 1080p copy**, Premiere keeps the clip's old Scale. If it looks smaller in the frame,
+> select it in the timeline, right-click → **Set to Frame Size** (or set **Scale** to 100 in Effect Controls).
+> EditReady reminds you of this after a 1080p conversion.
+
+Example: an 18-minute 4K60 video that is 2 GB (15 Mbps):
+
+| | Original resolution | 1080p |
 |---|---|---|
-| Snappiest editing | 5 frames | Very fast cutting and scrubbing. Biggest files. |
-| **Balanced** (default) | 10 frames | Fast cuts and exports at a sensible size. |
-| Smaller files | 30 frames | Saving disk space. Still far quicker than a raw OBS recording. |
+| Snappiest editing | ~5.8 GB | ~3.5 GB |
+| **Balanced** | **~3.9 GB** | **~2.4 GB** |
+| Smaller files | ~3.0 GB | ~1.7 GB |
 
 ## Features
 
@@ -81,7 +99,9 @@ Your original files are never changed.
   Without an NVIDIA GPU, or if a file won't convert on the GPU, it switches to the CPU automatically.
 - **Keeps every audio track** (game, mic, Discord… OBS multi-track recordings) untouched. AAC/MP3 audio is copied as-is;
   other formats (FLAC, Opus, PCM) become AAC 320 kbps, because Premiere doesn't read FLAC.
-- **High quality:** the video is re-encoded at well above YouTube's upload bitrate, so you won't see a difference after export.
+- **High quality without wasted space:** the copy is encoded at constant quality 16, capped at a multiple of the
+  original's own bitrate, because a copy can't be sharper than its source. Spending more only makes the file bigger.
+- **Optional 1080p downscale** for 4K / 1440p footage: about 3× faster to convert, smaller files, smoother editing.
 - **Checks disk space first:** each card shows how big its copy will be, and EditReady warns you if a drive is too full.
 - **Easy to follow:** percent, speed and time left for each video, an overall time left, and progress on the taskbar icon.
 - **Safe:**
@@ -89,6 +109,8 @@ Your original files are never changed.
   - half-finished files are cleaned up if you press Stop
   - your PC won't go to sleep while converting
 - Plays a sound and flashes the taskbar when it's done. Remembers your settings. **Ctrl+O** adds videos.
+- **Command line:** `EditReady.exe [--queue] [--cpu] files-or-folders…`. Files given this way start right away;
+  `--queue` only adds them to the list (handy for a *Send to* shortcut). `--cpu` skips the GPU.
 
 ## Requirements
 
@@ -113,12 +135,13 @@ instead of MKV. New recordings will then cut and export quickly without any conv
 ## FAQ
 
 **Does it lower the quality?**
-Not in a way you'll see. Copies are encoded at constant quality 16 (H.264, about 30–40 Mbps for 1080p60),
-well above what YouTube or a typical Premiere export uses.
+Not in a way you'll see. Copies use constant quality 16 (H.264), capped at 2× the original's bitrate on Balanced.
+Measured against the originals (SSIM, where 1.0 is identical), a 10 Mbps 1080p60 OBS recording scored 0.993,
+and a 15 Mbps 4K60 recording scored 0.982 at 4K. Without the cap, the 4K file would have been 5× bigger for a score of 0.987.
 
 **How big are the copies?**
-Usually 2–3× the size of an OBS recording, around 5 GB for 20 minutes of 1080p60. That's the price of more full pictures.
-Delete the `_edit.mp4` files once your video is published.
+About 1.5–2.5× the original on Balanced. That's the price of more full pictures.
+For example, 20 minutes of 10 Mbps 1080p60 makes a ~2.3 GB copy. Delete the `_edit.mp4` files once your video is published.
 
 **Is it only for Premiere?**
 No. Any editor that struggles with long-GOP footage benefits, including DaVinci Resolve, Vegas and After Effects.
@@ -137,15 +160,19 @@ Click **Details** on its card to see what ffmpeg reported, then **Retry**. If it
 For each video, EditReady runs roughly:
 
 ```
-ffmpeg -hwaccel cuda -i input.mkv -map 0:V:0 -map 0:a? \
-  -c:v h264_nvenc -preset p5 -rc vbr -cq 16 -b:v 60M -maxrate 80M -bufsize 160M -profile:v high \
+ffmpeg -hwaccel cuda -i input.mkv -map 0:V:0 -map 0:a? [-vf scale=-2:1080:flags=bicubic] \
+  -c:v h264_nvenc -preset p5 -rc vbr -cq 16 -b:v <0.85 × cap>M \
+  -maxrate <cap>M -bufsize <2 × cap>M -profile:v high \
   -g 10 -keyint_min 10 -bf 0 -pix_fmt yuv420p \
   -c:a copy -map_metadata 0 input_edit.mp4
 ```
 
 - `-g 10 -bf 0` gives a full picture every 10 frames and no B-frames, so every frame is cheap to reach.
-- Bitrates scale with resolution and frame rate (so 4K60 gets more, 720p30 less).
-- CPU fallback: `-c:v libx264 -preset veryfast -crf 16` with the same keyframe settings.
+- **cap** = the original's video bitrate × 3 / 2 / 1.4 (Snappiest / Balanced / Smaller).
+  - When shrinking to 1080p, the source bitrate counts at 60% first.
+  - Never below 10 Mbps at 1080p60 (scaled gently for other sizes), so low-bitrate sources don't get starved.
+  - Never above 80 Mbps at 1080p60 (scaled with resolution and frame rate).
+- CPU fallback: `-c:v libx264 -preset veryfast -crf 16` with the same cap and keyframe settings.
 - The copy is written as `*.converting.mp4` and renamed only when finished, so a half-done file never looks finished.
 
 ## Build from source

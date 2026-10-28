@@ -377,6 +377,7 @@
           <StackPanel>
             <TextBlock Text="Next step in Premiere" FontWeight="SemiBold"/>
             <TextBlock TextWrapping="Wrap" Foreground="#D6CEFF" FontSize="12.5" Margin="0,4,0,0">Right-click the clip in the Project panel → <Bold>Replace Footage…</Bold> → pick the <Bold>_edit.mp4</Bold>. Your edit stays exactly the same; it just exports much faster.</TextBlock>
+            <TextBlock x:Name="TipScale" TextWrapping="Wrap" Foreground="#F5D08A" FontSize="12.5" Margin="0,6,0,0" Visibility="Collapsed"><Bold>Shrunk to 1080p?</Bold> If the clip looks smaller after Replace Footage, select it in the timeline, right-click → <Bold>Set to Frame Size</Bold> (or set Scale to 100 in Effect Controls).</TextBlock>
           </StackPanel>
           <Button x:Name="TipClose" Grid.Column="1" Style="{StaticResource IconBtn}" VerticalAlignment="Top" ToolTip="Don't show this again" AutomationProperties.Name="Hide tip">
             <Path Data="M0,0 L9,9 M9,0 L0,9" Stroke="#D6CEFF" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="9" Height="9" Stretch="Uniform"/>
@@ -419,9 +420,18 @@
             <TextBlock Text="OPTIMIZE FOR" Style="{StaticResource Caption}"/>
             <Border Style="{StaticResource Segment}">
               <StackPanel Orientation="Horizontal">
-                <RadioButton x:Name="GopFast" Content="Snappiest editing" GroupName="gop" Style="{StaticResource Pill}" ToolTip="A full frame every 5 frames: instant jumps and scrubbing. Biggest files."/>
-                <RadioButton x:Name="GopBal" Content="Balanced" GroupName="gop" Style="{StaticResource Pill}" IsChecked="True" ToolTip="A full frame every 10 frames. Recommended: fast cutting and exporting at a sensible file size."/>
-                <RadioButton x:Name="GopSmall" Content="Smaller files" GroupName="gop" Style="{StaticResource Pill}" ToolTip="A full frame every 30 frames. Smaller files, still far quicker to edit than a raw OBS recording."/>
+                <RadioButton x:Name="GopFast" Content="Snappiest editing" GroupName="gop" Style="{StaticResource Pill}" ToolTip="A full frame every 5 frames: instant jumps and scrubbing. Biggest files (up to 3× the original's bitrate)."/>
+                <RadioButton x:Name="GopBal" Content="Balanced" GroupName="gop" Style="{StaticResource Pill}" IsChecked="True" ToolTip="A full frame every 10 frames, up to 2× the original's bitrate. Recommended: fast cutting and exporting at a sensible file size."/>
+                <RadioButton x:Name="GopSmall" Content="Smaller files" GroupName="gop" Style="{StaticResource Pill}" ToolTip="A full frame every 30 frames, up to 1.4× the original's bitrate. Smallest files, still far quicker to edit than a raw OBS recording."/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+          <StackPanel Margin="36,0,0,0">
+            <TextBlock Text="RESOLUTION" Style="{StaticResource Caption}"/>
+            <Border Style="{StaticResource Segment}">
+              <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="ResOrig" Content="Original" GroupName="res" Style="{StaticResource Pill}" IsChecked="True" ToolTip="Keep each video's resolution."/>
+                <RadioButton x:Name="Res1080" Content="1080p" GroupName="res" Style="{StaticResource Pill}" ToolTip="Shrink 4K and 1440p videos to 1080p: about twice as fast to convert, smaller files, smoother editing. Videos that are already 1080p or smaller are left as they are. Best when you export in 1080p."/>
               </StackPanel>
             </Border>
           </StackPanel>
