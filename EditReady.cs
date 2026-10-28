@@ -659,13 +659,22 @@ namespace EditReady
             string took = Fmt(sw.Elapsed.TotalSeconds);
             bool cpu = !useGpu;
             bool shrunk = Downscales(mi, runScale);
+            double outVideoMbps = 0;
+            if (ffprobe != null)
+            {
+                string o;
+                Run(ffprobe, "-v error -select_streams V:0 -show_entries stream=bit_rate -of default=nw=1:nk=1 " + Q(outPath), out o);
+                double b;
+                if (double.TryParse(o.Trim(), NumberStyles.Float, Inv, out b)) outVideoMbps = b / 1e6;
+            }
             UI(delegate
             {
                 job.Output = outPath;
                 job.State = "Done";
                 job.Progress = 100;
                 job.Downscaled = shrunk;
-                job.StatusText = "Saved as " + Path.GetFileName(outPath) + (shrunk ? " (1080p)" : "") + "  \u00b7  " + FmtSize(size) + "  \u00b7  took " + took + (cpu ? " on the CPU" : "");
+                job.StatusText = "Saved as " + Path.GetFileName(outPath) + (shrunk ? " (1080p)" : "") + "  \u00b7  " + FmtSize(size)
+                    + (outVideoMbps > 0 ? "  \u00b7  " + FmtMbps(outVideoMbps) : "") + "  \u00b7  took " + took + (cpu ? " on the CPU" : "");
                 runDone++;
                 UpdateView();
             });
@@ -911,7 +920,8 @@ namespace EditReady
         {
             if (j.Info == null) return "Reading video info\u2026";
             bool shrink = Downscales(j.Info, res1080.IsChecked == true);
-            return "Ready  \u00b7  " + (shrink ? "1080p copy" : "copy") + " will be about " + FmtSize((long)Estimate(j));
+            return "Ready  \u00b7  " + (shrink ? "1080p copy" : "copy") + " will be about " + FmtSize((long)Estimate(j))
+                + "  \u00b7  ~" + FmtMbps(EstimateVideoMbps(j)) + " video";
         }
 
         // Only shrink videos bigger than 1080p (short side over 1080 px); never enlarge.
@@ -953,7 +963,7 @@ namespace EditReady
 
         // Size of the copy: quality 16 naturally lands around 40 Mbps at 1080p60 (measured on OBS recordings),
         // unless the cap above is lower.
-        double Estimate(JobVM j)
+        double EstimateVideoMbps(JobVM j)
         {
             if (j.Info == null) return 0;
             int g = CurrentGop();
@@ -963,8 +973,13 @@ namespace EditReady
             Bitrates(j.Info, g, to1080, out target, out max);
             double gopFactor = g <= 5 ? 1.25 : (g >= 30 ? 0.8 : 1.0);
             double natural = 40 * PixelRatio(w, h, j.Info.Fps) * gopFactor;
-            double mbps = Math.Min(natural, max) + j.Info.AudioMbps;
-            return mbps * 1e6 / 8 * j.Info.Duration;
+            return Math.Min(natural, max);
+        }
+
+        double Estimate(JobVM j)
+        {
+            if (j.Info == null) return 0;
+            return (EstimateVideoMbps(j) + j.Info.AudioMbps) * 1e6 / 8 * j.Info.Duration;
         }
 
         static double PixelRatio(int w, int h, double fps)
@@ -984,8 +999,14 @@ namespace EditReady
             string fps = Math.Abs(mi.Fps - Math.Round(mi.Fps)) < 0.05 ? Math.Round(mi.Fps).ToString(Inv) : mi.Fps.ToString("0.##", Inv);
             var parts = new List<string> { res, fps + " fps" };
             if (mi.Duration > 0) parts.Add(Fmt(mi.Duration));
+            if (mi.VideoMbps > 0) parts.Add(FmtMbps(mi.VideoMbps));
             if (mi.FileBytes > 0) parts.Add(FmtSize(mi.FileBytes));
             return string.Join("  \u00b7  ", parts);
+        }
+
+        static string FmtMbps(double mbps)
+        {
+            return (Math.Round(mbps, 1) < 9.95 ? mbps.ToString("0.0", Inv) : Math.Round(mbps).ToString(Inv)) + " Mbps";
         }
 
         // ---------- save folder ----------

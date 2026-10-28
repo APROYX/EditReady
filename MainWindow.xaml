@@ -244,7 +244,7 @@
 
           <StackPanel Grid.Column="1" Margin="14,0,12,0" VerticalAlignment="Center">
             <TextBlock Text="{Binding FileName}" ToolTip="{Binding FullPath}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource Text1}" TextTrimming="CharacterEllipsis"/>
-            <TextBlock Text="{Binding Meta}" FontSize="12" Foreground="{StaticResource Text3}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="{Binding Meta}" FontSize="12" Foreground="{StaticResource Text3}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" ToolTip="Resolution · frame rate · length · video bitrate · file size. Bitrate is how much data each second of video uses: higher means more detail and bigger files."/>
             <TextBlock x:Name="status" Text="{Binding StatusText}" FontSize="12.5" Foreground="{StaticResource Text2}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
             <ProgressBar x:Name="bar" Style="{StaticResource Thin}" Value="{Binding Progress}" Margin="0,8,0,2" Visibility="Collapsed"/>
           </StackPanel>
