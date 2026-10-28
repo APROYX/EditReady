@@ -102,6 +102,8 @@ Example: an 18-minute 4K60 video that is 2 GB (15 Mbps):
 - **High quality without wasted space:** the copy is encoded at constant quality 16, capped at a multiple of the
   original's own bitrate, because a copy can't be sharper than its source. Spending more only makes the file bigger.
 - **Optional 1080p downscale** for 4K / 1440p footage: about 3× faster to convert, smaller files, smoother editing.
+- **Shows bitrates:** each card shows the original's video bitrate, the bitrate its copy will get, and the finished copy's
+  measured bitrate, so you can see exactly where the size comes from.
 - **Checks disk space first:** each card shows how big its copy will be, and EditReady warns you if a drive is too full.
 - **Easy to follow:** percent, speed and time left for each video, an overall time left, and progress on the taskbar icon.
 - **Safe:**
