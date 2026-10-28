@@ -1,0 +1,7 @@
+# Built app (published as a GitHub release instead)
+*.exe
+dist/
+
+# Leftovers from test conversions
+*_edit.mp4
+*.converting.mp4
